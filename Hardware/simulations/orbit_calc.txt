@@ -1,0 +1,239 @@
+%% Parameter
+
+clear all
+
+m=0.5;                                  %sat mass [kg]
+lt=100;                                 %tetherlength [m]
+lsat=0.1;                               %sat side length [m]
+lcw=0.05;                               %counterweigth side length [m]
+rho=2700;                               %density of tether material [kg/m^3]
+d=0.0005;                               %tether diameter [m]
+mratio=0.1;                             %ratio of endpointmass and satmass
+
+satalpha=20;                            %sat angle around z axis from x axis [°]
+satbeta=30;                             %sat angle from yx plane [°]
+satdirev=[cosd(satbeta)*cosd(satalpha); ...
+          cosd(satbeta)*sind(satalpha); ...
+          sind(satbeta)];               %sat direction vector along the tether (z axis) positiv in counterweigth direction 
+omega=[0; ...
+       0; ...
+       0];                              %inital rotational speed of the sat [rad/s]
+      
+rs=800000;                              %altitude
+longitude=0;                            %-180° - 180°
+latitude=0;                             %-90° - 90°
+inclination=60;                         %inclination [°] >= latitude!
+
+Kl=100000;                              %Karman line altitude [m]
+re=6.37*10^6;                           %earth radius
+
+decimalYear=2019.5;                     %year in decimal format
+generation=12;                          %Generation version of the International Geomagnetic Reference Field, specified as 11 or 12.
+
+G=66.73*10^(-12);                       %gravitation constant [m^3/kg*s^2]
+
+my_={"Sun"  1.32712440018*10^20;...
+"Mercury"	2.2032*10^13;...
+"Venus"     3.24859*10^14;...
+"Earth"     3.986004418*10^14;...
+"Moon"      4.9048695*10^12;...
+"Mars"      4.282837*10^13;...
+"Ceres"     6.26325*10^10;...
+"Jupiter"	1.26686534*10^17;...
+"Saturn"	3.7931187*10^16;...
+"Uranus"	5.793939*10^15;...
+"Neptune"	6.836529*10^15;...
+"Pluto"     8.71*10^11;...
+"Eris"      1.108*10^12};               %Standard gravitational parameter
+
+body="Earth";                           %selected body
+mu=cell2mat(my_(find(cellstr(my_(:,1))==body),2));
+
+dt=0.01;                                   %timestepsize [s]
+
+
+% Inital~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+re=geocradius(latitude);         %Convert from geocentric latitude to radius of ellipsoid planet
+r=re+rs;
+
+% inclination for Sun-Synchronous Circular Orbit
+% (https://smallsats.org/2013/04/11/sun-synchronous-circular-orbit/)
+if false
+    Re = 6378;               % Earth radius [km]
+    J2  = 0.0010826269;      % Second zonal gravity harmonic of the Earth
+    we = 1.99106e-7;    % Mean motion of the Earth in its orbit around the Sun [rad/s]
+    % Input
+    R   = rs/1000 + Re;       % Mean semimajor axis [km]
+    e   = 0.0;            % Eccentricity
+    h = R*(1 - e^2);     % [km]
+    n = (mu./R.^3).^0.5; % Mean motion [s-1]
+    tol = 1e-10;         % Error tolerance
+    inclination0 = 180/pi*acos(-2/3*(h/Re).^2*we./(n*J2));      % Initial guess for the orbital inclination
+    err = 1e1;
+    while(err >= tol )
+        % J2 perturbed mean motion
+        np  = n.*(1 + 1.5*J2*(Re./h).^2.*(1 - e^2)^0.5.*(1 - 3/2*sind(inclination0).^2));
+        inclination = 180/pi*acos(-2/3*(h/Re).^2*we./(np*J2));
+        err = abs(inclination - inclination0);
+        inclination0 = inclination;
+    end
+    longitude=0;                        
+    latitude=0; 
+end
+
+pos=[r*cosd(latitude)*cosd(longitude); ...
+     r*cosd(latitude)*sind(longitude); ...
+     r*sind(latitude)];                         %position vector Cartesian coordinate system [m;m;m]
+ 
+posev=pos./norm(pos);
+
+%{
+[gxi,gyi,gzi] = gravityzonal(pos', body, 4, 'Warning');
+gi=[gix;giy;giz];
+[gcix, gciy, gciz] = gravitycentrifugal(pos', body);
+gci=[gcix; gciy; gciz];
+gi=norm(gi+gci);
+%}
+
+vt=sqrt(mu/norm(pos));                          %tangential velocity for circular orbit [m/s]
+%vt=sqrt(gi*norm(pos));
+vx=-vt*sind(longitude)*cosd(inclination-latitude);
+vy=vt*cosd(longitude)*cosd(inclination-latitude);
+vz=vt*sind(inclination-latitude);
+v=[vx;vy;vz];                           %velocity vector [x;y;z] [m/s]
+                  
+
+%Sat/Tether~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+mt=lt*(d^2)/4*pi*rho;           %mass of the tether [kg]
+msat=(m-mt)*(1-mratio);         %mass of sat after deployment [kg]
+mcw=m-msat-mt;                  %mass of the counterweight [kg]
+comsat=(mt*lt/2+mcw*lt)/m;      %distance of center of mass from sat center [m]
+mth=(lt-comsat)*(d^2)/4*pi*rho;           %mass of the tether [kg]
+mtl=comsat*(d^2)/4*pi*rho;           %mass of the tether [kg]
+Isat=1/6*msat*lsat^2;           %moment of inertia of the sat [kg*m^2]
+Ith=1/4*mt*d^2/4+1/12*mt*(lt-comsat)^2;   %moment of inertia of the tether past the com around radial axis [kg*/m^2]
+Itl=1/4*mt*d^2/4+1/12*mt*comsat^2;   %moment of inertia of the tether below the com around radial axis [kg*m^2]
+It_=1/2*mt*d^2/4;               %moment of inertia of the tether around axial axis [kg*m^2]
+Icw=1/6*mcw*lcw^2;             %moment of inertia of the sat [kg*m^2]
+I=[Isat+msat*comsat^2+Itl+mtl*(comsat/2)^2+Ith+mth*((lt-comsat)/2)^2+Icw+mcw*(lt-comsat)^2, ...
+   Isat+msat*comsat^2+Itl+mtl*(comsat/2)^2+Ith+mth*((lt-comsat)/2)^2+Icw+mcw*(lt-comsat)^2, ...
+   Isat+It_+Icw];              %moment of inertia around center of mass, tehter along the z' axis [x',y',z'] [kg*m^2]
+
+
+% Magneticfield~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+%[magFieldVector,maghorIntensity,magdecl,magincl,magtotalIntensity,magFieldSecVariation,magsecVariH,magsecVariDecl,magsecVariIncl,magsecVariTotal] = igrfmagm(r-re,latitude,longitude,decimalYear,generation);
+
+%% Calc
+
+if abs(inclination)<abs(latitude)
+    error("|inclination| >= |latitude|!")
+end
+
+tend=7*60*60*24;
+posh=zeros(tend/dt,3);
+posh(1,:)=pos';                                 %position history
+satdirevh=zeros(tend/dt,3);
+satdirevh(1,:)=satdirev';                       %sat direction history
+t=0;                                            %timestart [s]
+b=1;                                            %number of timesteps
+
+while ((t<tend))% || (pos(1)>(re+Kl)))
+    
+    b=b+1;
+    dpos=v.*dt;     
+    pos=pos+dpos;                       %new sat positoin
+    posh(b,:)=pos';
+    posev=pos./norm(pos);               %position unit vector
+    phi=omega.*dt;      
+    satdirev=rotationVectorToMatrix(phi)*satdirev; %new sat direction
+    satdirevh(b,:)=satdirev';                   %sat direction unit vector
+
+    Ft=[0;-2*10^(-6)*0;0];                      %insert tether force here
+    F=Ft;
+    
+    %calculate gravitational acceleration on all sat parts
+    [gxsat,gysat,gzsat] = gravityzonal(pos'-satdirev'.*comsat, body, 4, 'Warning');
+    gsat=[gxsat;gysat;gzsat];
+    [gcxsat,gcysat,gczsat] = gravitycentrifugal(pos'-satdirev'.*comsat, body);
+    gcsat=[gcxsat;gcysat;gczsat];
+    Msat=cross(-satdirev'.*comsat,(gsat+gcsat).*msat);
+    
+    [gxtl,gytl,gztl] = gravityzonal(pos'-satdirev'.*(comsat/2), body, 4, 'Warning');
+    gtl=[gxtl;gytl;gztl];
+    [gcxtl,gcytl,gcztl] = gravitycentrifugal(pos'-satdirev'.*(comsat/2), body);
+    gctl=[gcxtl;gcytl;gcztl];
+    Mtl=cross(-satdirev'.*(comsat/2),(gtl+gctl).*mtl);
+    
+    [gxth,gyth,gzth] = gravityzonal(pos'+satdirev'.*((lt-comsat)/2), body, 4, 'Warning');
+    gth=[gxth;gyth;gzth];
+    [gcxth,gcyth,gczth] = gravitycentrifugal(pos'+satdirev'.*((lt-comsat)/2), body);
+    gcth=[gcxth;gcyth;gczth];
+    Mth=cross(satdirev'.*((lt-comsat)/2),(gth+gcth).*mth);
+    
+    [gxcw,gycw,gzcw] = gravityzonal(pos'+satdirev'.*lt, body, 4, 'Warning');
+    gcw=[gxcw;gycw;gzcw];
+    [gcxcw,gcycw,gczcw] = gravitycentrifugal(pos'+satdirev'.*lt, body);
+    gccw=[gcxcw;gcycw;gczcw];
+    Mcw=cross(satdirev'.*lt,(gcw+gccw)*mcw);
+    
+    M=Msat+Mtl+Mth+Mcw;
+    omega=M./I.*dt;                     %angular velocity of the sat
+    
+    g=(gsat.*msat+gtl.*mtl+gth.*mth+gcw*mcw)./m;
+    gc=(gcsat.*msat+gctl.*mtl+gcth.*mth+gccw*mcw)./m;
+    a=g+gc+F./m;
+    dv=a.*dt;
+    v=v+dv;    
+    
+    t=t+dt;
+    
+    disp([norm(pos)-re , "m   |||   " , norm(v) , "m/s   |||   " , t/tend*100 , "%"])
+    
+end
+
+%% plot
+
+posh=posh(1:b-1,:);
+satdirevh=satdirevh(1:b-1,:);
+
+tt=linspace(0,t,length(posh(:,1)));
+tt=tt./86400;
+
+sep=50;
+
+[sx,sy,sz]=sphere(1200);
+sx=sx*re;
+sy=sy*re;
+sz=sz*re;
+I = im2double(imread('earth_surface_texture_miyazaki_4096x2048_recenter.jpg'));
+J = flipud(imresize(I,size(sx)));
+
+hold on
+plot3(posh(1:sep:end,1),posh(1:sep:end,2),posh(1:sep:end,3),'LineWidth',3)
+pcshow([sx(:),sy(:),sz(:)],reshape(J,[],3));
+plot3([0,re*1.5],[0,0],[0,0],'LineWidth',2,'Color','k')
+plot3([0,0],[0,re*1.5],[0,0],'LineWidth',2,'Color','k')
+plot3([0,0],[0,0],[0,re*1.5],'LineWidth',2,'Color','k')
+hold off
+pbaspect([1 1 1])
+view(3)
+set(gca,'XLim',[-re*2 re*2]);
+set(gca,'YLim',[-re*2 re*2]);
+set(gca,'ZLim',[-re*2 re*2]);
+set(gca,'XTickLabel',{});
+set(gca,'YTickLabel',{});
+set(gca,'ZTickLabel',{});
+%set(gca,'YLim',[0 rs*1.2]);
+%set(gca,'linewidth',3)
+xlabel('X');
+ylabel('Y');
+zlabel('Z');
+text(re*1.52,0,0,"X")
+text(0,re*1.52,0,"Y")
+text(0,0,re*1.52,"Z")
+%title('Orbit');
+%set(gca,'FontSize',20)
+%plot3(satdirevh(1:sep:end,1),satdirevh(1:sep:end,2),satdirevh(1:sep:end,3),'LineWidth',3)
